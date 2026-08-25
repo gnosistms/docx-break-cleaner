@@ -1,0 +1,45 @@
+name: Release desktop apps
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Test frontend
+        run: npm test
+      - name: Test DOCX engine
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build and publish installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: DOCX Break Cleaner ${{ github.ref_name }}
+          releaseBody: |
+            First public release of DOCX Break Cleaner.
+
+            - Windows x64 installer
+            - Offline DOCX scanning and repair
+            - Mechanical best-guess decisions with per-boundary review
+
+            The original document is never overwritten.
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc
