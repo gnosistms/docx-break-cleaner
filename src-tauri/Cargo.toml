@@ -1,6 +1,6 @@
 [package]
 name = "docx-break-cleaner"
-version = "0.1.0"
+version = "0.1.1"
 description = "Offline review and repair of hidden DOCX paragraph breaks"
 authors = ["Gnosis TMS"]
 edition = "2021"

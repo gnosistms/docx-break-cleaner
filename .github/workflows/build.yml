@@ -25,6 +25,20 @@ jobs:
         run: npm test
       - name: Test DOCX engine
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build frontend
+        run: npm run build
+      - name: Verify Windows app uses the GUI subsystem
+        shell: pwsh
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --release --target x86_64-pc-windows-msvc
+          $exe = "src-tauri/target/x86_64-pc-windows-msvc/release/docx-break-cleaner.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $optionalHeaderOffset = $peOffset + 24
+          $subsystem = [BitConverter]::ToUInt16($bytes, $optionalHeaderOffset + 68)
+          if ($subsystem -ne 2) {
+            throw "Expected Windows GUI subsystem (2), found $subsystem"
+          }
       - name: Build and publish installers
         uses: tauri-apps/tauri-action@v0
         env:
@@ -33,7 +47,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: DOCX Break Cleaner ${{ github.ref_name }}
           releaseBody: |
-            First public release of DOCX Break Cleaner.
+            Windows x64 release of DOCX Break Cleaner.
 
             - Windows x64 installer
             - Offline DOCX scanning and repair
