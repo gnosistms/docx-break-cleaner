@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f0e7" />
+    <meta
+      name="description"
+      content="Download DOCX Break Cleaner, a private offline utility for repairing unwanted paragraph breaks in Word documents."
+    />
+    <title>Download DOCX Break Cleaner</title>
+    <link rel="icon" href="./app-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-glow" aria-hidden="true"></div>
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="DOCX Break Cleaner home">
+        <img src="./app-icon.svg" alt="" width="38" height="38" />
+        <span>DOCX Break Cleaner</span>
+      </a>
+      <a class="github-link" id="githubLink" href="#" hidden>
+        View on GitHub
+        <span aria-hidden="true">↗</span>
+      </a>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span></span> PRIVATE, OFFLINE DOCUMENT REPAIR</div>
+          <h1>Clean up broken Word documents in minutes.</h1>
+          <p class="lede">
+            Find paragraph marks hidden inside OCR and PDF-converted text, review each repair,
+            and save a clean copy—without uploading your document anywhere.
+          </p>
+
+          <div class="download-panel" aria-labelledby="downloadHeading">
+            <div class="platform-icon" id="platformIcon" aria-hidden="true">⌘</div>
+            <div class="download-copy">
+              <span class="download-label">RECOMMENDED FOR THIS DEVICE</span>
+              <h2 id="downloadHeading">Download for macOS</h2>
+              <p id="downloadMeta">Apple silicon · macOS 11 or newer</p>
+            </div>
+            <a class="primary-button" id="primaryDownload" href="./downloads/DOCX%20Break%20Cleaner_0.1.0_aarch64.dmg">
+              <span>Download</span>
+              <span aria-hidden="true">↓</span>
+            </a>
+          </div>
+          <p class="release-note" id="releaseNote" aria-live="polite">
+            Checking the latest release…
+          </p>
+        </div>
+
+        <div class="product-preview" aria-label="Preview of the DOCX Break Cleaner app">
+          <div class="window-bar">
+            <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span>DOCX Break Cleaner</span>
+          </div>
+          <div class="preview-body">
+            <div class="preview-heading">
+              <div>
+                <small>DOCUMENT</small>
+                <strong>Converted manuscript.docx</strong>
+              </div>
+              <span class="local-badge"><i></i> Local only</span>
+            </div>
+            <div class="summary-row">
+              <div><b>12</b><span>Certain repairs</span></div>
+              <div><b>3</b><span>Needs review</span></div>
+              <div><b>428</b><span>Paragraphs</span></div>
+            </div>
+            <div class="finding">
+              <div class="check">✓</div>
+              <div>
+                <div class="finding-top"><span>CERTAIN</span><small>Paragraphs 84–85</small></div>
+                <p>この文章はページの途中で<span class="paragraph-mark">¶</span><br />不自然に分割されています。</p>
+                <small>Sentence continues across the paragraph boundary</small>
+              </div>
+            </div>
+            <div class="save-strip">
+              <span><b>12 selected</b><small>Original file stays unchanged</small></span>
+              <span class="fake-button">Save cleaned copy</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="trust-strip" aria-label="Product benefits">
+        <div><span class="trust-icon">⌂</span><p><strong>100% offline</strong><small>Documents never leave your computer</small></p></div>
+        <div><span class="trust-icon">◇</span><p><strong>Original stays safe</strong><small>Always saves a separate cleaned copy</small></p></div>
+        <div><span class="trust-icon">✓</span><p><strong>You stay in control</strong><small>Review every change before saving</small></p></div>
+      </section>
+
+      <section class="releases-section" id="releases">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">ALL DOWNLOADS</span>
+            <h2>Choose your platform</h2>
+          </div>
+          <p>Installers are built from the project source and published with each tagged release.</p>
+        </div>
+
+        <div class="release-grid" id="releaseGrid">
+          <article class="release-card" data-platform="mac">
+            <div class="release-card-top"><span class="os-icon">⌘</span><span class="status-pill">Available</span></div>
+            <h3>macOS</h3>
+            <p>For Apple silicon Macs running macOS 11 or newer.</p>
+            <a class="secondary-button asset-link" data-kind="mac" href="./downloads/DOCX%20Break%20Cleaner_0.1.0_aarch64.dmg">Download .dmg <span>↓</span></a>
+          </article>
+          <article class="release-card" data-platform="windows">
+            <div class="release-card-top"><span class="os-icon windows-icon">⊞</span><span class="status-pill">Available</span></div>
+            <h3>Windows</h3>
+            <p>Per-user installer for Windows 10 and Windows 11.</p>
+            <a class="secondary-button asset-link" data-kind="windows" href="#">Download installer <span>↓</span></a>
+          </article>
+        </div>
+
+        <div class="installation-note">
+          <span aria-hidden="true">i</span>
+          <p>
+            <strong>First launch on macOS</strong>
+            This early build is not yet notarized. If macOS blocks it, right-click the app,
+            choose <em>Open</em>, then confirm. Only download releases from this page.
+          </p>
+        </div>
+      </section>
+
+      <section class="how-it-works">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">SIMPLE BY DESIGN</span>
+            <h2>Three steps to a clean document</h2>
+          </div>
+        </div>
+        <ol>
+          <li><span>01</span><div><strong>Choose a DOCX</strong><p>Drop in an OCR or PDF-converted Word file.</p></div></li>
+          <li><span>02</span><div><strong>Review the findings</strong><p>Clear candidates are selected; uncertain ones wait for you.</p></div></li>
+          <li><span>03</span><div><strong>Save a clean copy</strong><p>Your original remains exactly where it was, unchanged.</p></div></li>
+        </ol>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand"><img src="./app-icon.svg" alt="" width="32" height="32" /><span>DOCX Break Cleaner</span></div>
+      <p>Built by Gnosis TMS · Careful document repair</p>
+    </footer>
+
+    <script src="./downloads.js" defer></script>
+  </body>
+</html>

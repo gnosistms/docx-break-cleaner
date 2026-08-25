@@ -17,7 +17,8 @@ tool and is not part of Gnosis TMS.
 
 ## Downloads
 
-Installers for Windows x64 are published on the
+Use the [download page](https://gnosistms.github.io/docx-break-cleaner/) for the
+easiest platform-specific download, or browse the
 [GitHub Releases page](https://github.com/gnosistms/docx-break-cleaner/releases).
 
 The initial Windows installer is unsigned, so Microsoft Defender SmartScreen
@@ -55,13 +56,19 @@ DOCX_CLEANER_REFERENCE="/path/to/The Great Rebellion 偉大なる反乱.docx" \
 
 ## Distribution
 
+The download site lives in `docs/` and is deployed to GitHub Pages by
+`.github/workflows/pages.yml`. It detects the repository from the Pages URL and
+links each platform button to the matching asset from the latest GitHub Release.
+Until a macOS release asset is published, the Pages artifact includes the
+existing macOS 0.1.0 prototype as a direct-download fallback.
+
 ```bash
 npm run tauri:build
 ```
 
-The included GitHub Actions workflow builds Windows x64 installers and attaches
-them to tagged GitHub releases. macOS builds are currently for local development
-and testing only.
+The included release workflow builds Windows x64 installers and attaches them
+to tagged GitHub releases. macOS builds are currently for local development and
+testing only.
 
 Copyright © 2026 Gnosis TMS. All rights reserved. No open-source license is
 granted by publication of this source code.
