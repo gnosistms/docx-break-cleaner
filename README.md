@@ -42,8 +42,9 @@ Use the [download page](https://gnosistms.github.io/docx-break-cleaner/) for the
 easiest platform-specific download, or browse the
 [GitHub Releases page](https://github.com/gnosistms/docx-break-cleaner/releases).
 
-The installers are not code-signed, so Microsoft Defender SmartScreen (Windows)
-or Gatekeeper (macOS) may warn the first time the app is opened. After v0.2.0 is
+The Windows installers are not code-signed, so Microsoft Defender SmartScreen
+may warn the first time they are opened. The macOS build is signed and notarized
+from v0.2.1. After v0.2.0 is
 installed, later versions arrive through the app's own update prompt.
 
 ## Safety model
@@ -93,9 +94,11 @@ links each platform button to the matching asset from the latest GitHub Release.
 
 Pushing a `v*` tag runs `.github/workflows/build.yml`, which builds the Windows
 x64 installers and the Apple silicon macOS `.dmg` and attaches them, with their
-updater signatures and `latest.json`, to one GitHub Release. Neither platform is
-code-signed by Microsoft or Apple, so SmartScreen and Gatekeeper warn on first
-install.
+updater signatures and `latest.json`, to one GitHub Release. The macOS app and
+disk image are signed with the Gnosis TMS Developer ID certificate and notarized
+by Apple (repository secrets `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_CONTENT`, the same values as
+Gnosis TMS). The Windows installers are not code-signed.
 
 ## Updates
 
