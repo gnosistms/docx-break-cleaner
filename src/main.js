@@ -9,6 +9,7 @@ import {
   selectedCandidateIds,
   suggestedCandidateIds,
 } from "./presentation.js";
+import { offerUpdate } from "./updater.js";
 import "./styles.css";
 
 const MIN_SCANNING_INDICATOR_MS = 600;
@@ -31,7 +32,7 @@ app.innerHTML = `
       <div>
         <div class="eyebrow">OFFLINE DOCUMENT REPAIR</div>
         <h1>DOCX Break Cleaner</h1>
-        <p>Find paragraph marks hidden inside Japanese OCR text, review them, and save a separate cleaned copy.</p>
+        <p>Find paragraph marks hidden inside OCR or PDF-converted text, review them, and save a separate cleaned copy.</p>
       </div>
     </header>
 
@@ -45,6 +46,11 @@ app.innerHTML = `
     </section>
 
     <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+    <div id="updateBanner" class="update-banner" role="status" hidden>
+      <span></span>
+      <button class="button button-primary" type="button">Install update</button>
+    </div>
 
     <div id="saveModal" class="modal-backdrop" hidden>
       <section class="save-modal" role="dialog" aria-modal="true" aria-labelledby="saveModalTitle">
@@ -139,6 +145,10 @@ function setCandidateFilter(filter) {
     tab.classList.toggle("active", tab.dataset.filter === filter);
   });
   renderCandidates();
+}
+
+if (window.__TAURI_INTERNALS__ && !import.meta.env.DEV) {
+  offerUpdate(document.querySelector("#updateBanner"));
 }
 
 if (window.__TAURI_INTERNALS__) {

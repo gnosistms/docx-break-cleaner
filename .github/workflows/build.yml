@@ -6,10 +6,40 @@ on:
       - "v*"
 
 jobs:
-  release:
+  create-release:
     permissions:
       contents: write
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "DOCX Break Cleaner ${{ github.ref_name }}" \
+            --notes "Windows x64 and Apple silicon macOS release of DOCX Break Cleaner.
+
+          - Windows x64 installer (.exe, preferred) and .msi
+          - macOS Apple silicon .dmg
+          - Offline DOCX scanning and repair; the original document is never overwritten
+          - Installed copies from v0.2.0 on update themselves from the app"
+
+  release:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      # One platform at a time, so each adds itself to latest.json without a race.
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -18,7 +48,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
       - name: Install frontend dependencies
         run: npm ci
       - name: Test frontend
@@ -28,6 +58,7 @@ jobs:
       - name: Build frontend
         run: npm run build
       - name: Verify Windows app uses the GUI subsystem
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           cargo build --manifest-path src-tauri/Cargo.toml --release --target x86_64-pc-windows-msvc
@@ -43,17 +74,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: DOCX Break Cleaner ${{ github.ref_name }}
-          releaseBody: |
-            Windows x64 release of DOCX Break Cleaner.
-
-            - Windows x64 installer
-            - Offline DOCX scanning and repair
-            - Mechanical best-guess decisions with per-boundary review
-
-            The original document is never overwritten.
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-pc-windows-msvc
+          includeUpdaterJson: true
+          args: --target ${{ matrix.target }}

@@ -108,3 +108,7 @@ h1 { margin: 7px 0 7px; font-family: Georgia, "Yu Mincho", serif; font-size: cla
   .decision-control { width: 100%; }
   .repair-bar { padding: 12px; }
 }
+
+.update-banner { position: fixed; right: 18px; bottom: 18px; z-index: 25; display: flex; align-items: center; gap: 14px; border: 1px solid rgba(38,96,71,.14); border-radius: 14px; padding: 10px 10px 10px 16px; background: #fff; box-shadow: 0 14px 36px rgba(24,56,49,.18); color: #31554e; font-size: 14px; }
+.update-banner[hidden] { display: none; }
+.update-banner .button { padding: 8px 14px; }

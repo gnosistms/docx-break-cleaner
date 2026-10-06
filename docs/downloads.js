@@ -88,13 +88,13 @@ function wireRelease(release) {
 
   document.querySelector("#releaseNote").textContent = preferredAsset
     ? `${release.name || release.tag_name} · Latest release`
-    : "Version 0.1.0 · macOS preview";
+    : "Latest release on GitHub";
 }
 
 async function loadLatestRelease() {
   inferRepository();
   if (!page.owner || !page.repo) {
-    document.querySelector("#releaseNote").textContent = "Version 0.1.0 · macOS preview";
+    document.querySelector("#releaseNote").textContent = "Latest release on GitHub";
     setUnavailable("windows", null);
     return;
   }
@@ -106,7 +106,7 @@ async function loadLatestRelease() {
     if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
     wireRelease(await response.json());
   } catch {
-    document.querySelector("#releaseNote").textContent = "Version 0.1.0 · macOS preview";
+    document.querySelector("#releaseNote").textContent = "Latest release on GitHub";
     setUnavailable("windows", page.latestUrl);
   }
 }

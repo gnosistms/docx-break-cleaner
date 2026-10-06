@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DOCX Break Cleaner",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "com.gnosistms.docx-break-cleaner",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -40,11 +40,26 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["English", "Japanese"]
+        "languages": [
+          "English",
+          "Japanese"
+        ]
       }
     },
     "macOS": {
       "minimumSystemVersion": "11.0"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFREZBQUZCRENBMzk2M0UKUldRK2xxUGMrNnJmbm5qazIrMkdHK1lBQUh1OUM3SERTekxjdEFrZFV0cUVLMUM0RFdxTzBwejcK",
+      "endpoints": [
+        "https://github.com/gnosistms/docx-break-cleaner/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

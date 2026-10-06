@@ -1,8 +1,29 @@
 # DOCX Break Cleaner
 
 An offline desktop utility for reviewing and repairing hidden paragraph breaks
-introduced by OCR and PDF-to-DOCX conversion. This is a standalone Japan-team
-tool and is not part of Gnosis TMS.
+introduced by OCR and PDF-to-DOCX conversion. It is a standalone tool and is not
+part of Gnosis TMS.
+
+## What it detects
+
+The rules are picked per boundary from the characters on each side; there is no
+language setting.
+
+- **Japanese and Chinese text:** words and inflections split across paragraphs,
+  Katakana splits, detached punctuation, numbers split from units. Merged text is
+  joined with nothing in between.
+- **Space-separated scripts (English, Spanish, French…):** a line that stops
+  without punctuation and continues in lowercase; a line that runs to the right
+  margin without punctuation (in documents that store one printed line per
+  paragraph); line-end hyphens. Merged text is joined with one space. A line-end
+  hyphen is removed when the document spells the word elsewhere without it, and
+  kept when the document spells the compound with it; otherwise it is left for
+  review.
+- **Page numbers inside a sentence:** a paragraph holding only a page number
+  between two halves of a sentence is removed by that merge.
+
+Breaks between complete sentences (a line ending in a full stop followed by a
+capital letter) are never flagged.
 
 ## Operator workflow
 
@@ -21,8 +42,9 @@ Use the [download page](https://gnosistms.github.io/docx-break-cleaner/) for the
 easiest platform-specific download, or browse the
 [GitHub Releases page](https://github.com/gnosistms/docx-break-cleaner/releases).
 
-The initial Windows installer is unsigned, so Microsoft Defender SmartScreen
-may show a one-time warning when it is first opened.
+The installers are not code-signed, so Microsoft Defender SmartScreen (Windows)
+or Gatekeeper (macOS) may warn the first time the app is opened. After v0.2.0 is
+installed, later versions arrive through the app's own update prompt.
 
 ## Safety model
 
@@ -47,7 +69,16 @@ Rust tests:
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Run the local golden test against the audited reference document:
+Run the local English audit (prints counts by rule; optional JSON dump and
+repaired copy):
+
+```bash
+DOCX_CLEANER_ENGLISH="/path/to/Fundamental Education SAW.docx" \
+  DOCX_CLEANER_DUMP=/tmp/candidates.json DOCX_CLEANER_TEST_OUTPUT=/tmp/cleaned.docx \
+  cargo test --manifest-path src-tauri/Cargo.toml english_reference_audit -- --nocapture
+```
+
+Run the local golden test against the audited Japanese reference document:
 
 ```bash
 DOCX_CLEANER_REFERENCE="/path/to/The Great Rebellion 偉大なる反乱.docx" \
@@ -59,16 +90,29 @@ DOCX_CLEANER_REFERENCE="/path/to/The Great Rebellion 偉大なる反乱.docx" \
 The download site lives in `docs/` and is deployed to GitHub Pages by
 `.github/workflows/pages.yml`. It detects the repository from the Pages URL and
 links each platform button to the matching asset from the latest GitHub Release.
-Until a macOS release asset is published, the Pages artifact includes the
-existing macOS 0.1.0 prototype as a direct-download fallback.
 
-```bash
-npm run tauri:build
-```
+Pushing a `v*` tag runs `.github/workflows/build.yml`, which builds the Windows
+x64 installers and the Apple silicon macOS `.dmg` and attaches them, with their
+updater signatures and `latest.json`, to one GitHub Release. Neither platform is
+code-signed by Microsoft or Apple, so SmartScreen and Gatekeeper warn on first
+install.
 
-The included release workflow builds Windows x64 installers and attaches them
-to tagged GitHub releases. macOS builds are currently for local development and
-testing only.
+## Updates
+
+From v0.2.0 the app checks
+`releases/latest/download/latest.json` once at startup and offers to install a
+newer version. Only the version check goes over the network; documents never
+leave the computer, and the check fails silently when offline. Updates must be
+signed with the updater key:
+
+- private key: `~/.tauri/docx-break-cleaner.key` (password beside it in
+  `docx-break-cleaner.key.password`) on the maintainer's Mac, and in the
+  repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
+- public key: `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+
+If the private key is lost, installed copies can no longer be updated
+automatically; users would have to download a new installer by hand.
 
 Copyright © 2026 Gnosis TMS. All rights reserved. No open-source license is
 granted by publication of this source code.

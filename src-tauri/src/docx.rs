@@ -1,8 +1,8 @@
-use crate::rules::{classify_boundary, Confidence};
-use quick_xml::events::Event;
+use crate::rules::{classify_boundary, Confidence, DocumentContext, Join};
+use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,9 @@ pub(crate) struct ParagraphFormat {
     pub(crate) first_line_indent: Option<f64>,
     pub(crate) is_list: bool,
     pub(crate) is_heading: bool,
+    /// Font, size, bold and italic of the paragraph's first and last text runs.
+    pub(crate) first_run: Option<String>,
+    pub(crate) last_run: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +35,12 @@ pub(crate) struct ParagraphRecord {
     pub(crate) text: String,
     pub(crate) format: ParagraphFormat,
     pub(crate) unsafe_content: bool,
+    /// The paragraph holds only a printed page number, such as `18`.
+    pub(crate) is_page_number: bool,
+    /// The paragraph's last `w:t` ends with a hyphen that can be removed in place.
+    pub(crate) hyphen_removable: bool,
+    /// Number of `w:t` elements, used to find the last one while rewriting.
+    pub(crate) text_element_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -47,6 +56,12 @@ pub struct BreakCandidate {
     pub before_text: String,
     pub after_text: String,
     pub joined_text: String,
+    /// Text of a page-number paragraph between the two that a merge removes.
+    pub removed_text: Option<String>,
+    #[serde(skip)]
+    removed_paragraph: Option<usize>,
+    #[serde(skip)]
+    join: Join,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,19 +167,18 @@ where
     let root = parse_document_xml(&entries[document_index].data)?;
     let paragraphs = collect_body_paragraphs(&root)?;
     let (candidates, _) = detect_candidates(&paragraphs);
-    let mut selected = Vec::new();
+    let mut plan = MergePlan::default();
     for id in candidate_ids {
         let candidate = candidates
             .iter()
             .find(|candidate| &candidate.id == id)
             .ok_or_else(|| format!("The selected repair '{id}' is no longer valid."))?;
-        selected.push(candidate.first_paragraph);
+        plan.add(candidate, &paragraphs);
     }
-    selected.sort_unstable();
-    selected.dedup();
+    let merged_count = plan.continues.len();
     ensure_not_cancelled(cancelled)?;
     progress(42, "Merging paragraph breaks…");
-    entries[document_index].data = merge_document_xml(&entries[document_index].data, &selected)?;
+    entries[document_index].data = merge_document_xml(&entries[document_index].data, &plan)?;
     ensure_not_cancelled(cancelled)?;
 
     let parent = output
@@ -197,7 +211,7 @@ where
     progress(100, "Cleaned copy saved.");
     Ok(RepairResult {
         output_path: output.to_string_lossy().to_string(),
-        merged_count: selected.len(),
+        merged_count,
         output_bytes,
     })
 }
@@ -326,10 +340,22 @@ fn collect_body_paragraphs(root: &Element) -> Result<Vec<ParagraphRecord>, Strin
             continue;
         }
         let number = paragraphs.len() + 1;
+        let text = paragraph_text(element);
+        let text_elements = text_elements(element);
         paragraphs.push(ParagraphRecord {
             number,
             body_slot,
-            text: paragraph_text(element),
+            is_page_number: is_page_number(&text),
+            hyphen_removable: text_elements.last().is_some_and(|last| {
+                last.ends_with('-')
+                    && last
+                        .trim_end_matches('-')
+                        .chars()
+                        .last()
+                        .is_some_and(char::is_alphabetic)
+            }),
+            text_element_count: text_elements.len(),
+            text,
             format: paragraph_format(element),
             unsafe_content: paragraph_has_unsafe_content(element),
         });
@@ -338,12 +364,39 @@ fn collect_body_paragraphs(root: &Element) -> Result<Vec<ParagraphRecord>, Strin
 }
 
 fn detect_candidates(paragraphs: &[ParagraphRecord]) -> (Vec<BreakCandidate>, usize) {
+    let context = DocumentContext::from_paragraphs(paragraphs);
     let mut candidates = Vec::new();
     let mut excluded_complex = 0usize;
-    for pair in paragraphs.windows(2) {
-        let previous = &pair[0];
-        let following = &pair[1];
-        if !body_slots_are_adjacent(previous.body_slot, following.body_slot) {
+    for (index, previous) in paragraphs.iter().enumerate() {
+        if previous.is_page_number {
+            continue;
+        }
+        let Some(mut following) = paragraphs.get(index + 1) else {
+            break;
+        };
+        let mut removed = None;
+        if following.is_page_number {
+            // A printed page number between two lines of text: look past it.
+            let Some(after) = paragraphs.get(index + 2) else {
+                continue;
+            };
+            if after.is_page_number
+                || following.unsafe_content
+                || !body_slots_are_adjacent(following.body_slot, after.body_slot)
+            {
+                continue;
+            }
+            removed = Some(following);
+            following = after;
+        }
+        let adjacent = match removed {
+            Some(page) => {
+                body_slots_are_adjacent(previous.body_slot, page.body_slot)
+                    && body_slots_are_adjacent(page.body_slot, following.body_slot)
+            }
+            None => body_slots_are_adjacent(previous.body_slot, following.body_slot),
+        };
+        if !adjacent {
             continue;
         }
         if previous.unsafe_content || following.unsafe_content {
@@ -352,12 +405,19 @@ fn detect_candidates(paragraphs: &[ParagraphRecord]) -> (Vec<BreakCandidate>, us
             }
             continue;
         }
-        let Some(rule_match) = classify_boundary(previous, following) else {
+        let Some(rule_match) = classify_boundary(previous, following, &context) else {
             continue;
         };
         let before_text = tail_chars(previous.text.trim(), 130);
         let after_text = head_chars(following.text.trim(), 130);
-        let joined_text = format!("{before_text}{after_text}");
+        let joined_text = match rule_match.join {
+            Join::Nothing => format!("{before_text}{after_text}"),
+            Join::Space => format!("{before_text} {after_text}"),
+            Join::RemoveHyphen => format!(
+                "{}{after_text}",
+                before_text.strip_suffix('-').unwrap_or(&before_text)
+            ),
+        };
         candidates.push(BreakCandidate {
             id: format!("p{}-p{}", previous.number, following.number),
             first_paragraph: previous.number,
@@ -369,13 +429,31 @@ fn detect_candidates(paragraphs: &[ParagraphRecord]) -> (Vec<BreakCandidate>, us
             .to_string(),
             suggested_merge: rule_match.suggested_merge,
             reason_code: rule_match.code.to_string(),
-            reason: rule_match.reason.to_string(),
+            reason: match removed {
+                Some(page) => format!(
+                    "{} The page number “{}” between them is removed.",
+                    rule_match.reason,
+                    page.text.trim()
+                ),
+                None => rule_match.reason.to_string(),
+            },
             before_text,
             after_text,
             joined_text,
+            removed_text: removed.map(|page| page.text.trim().to_string()),
+            removed_paragraph: removed.map(|page| page.number),
+            join: rule_match.join,
         });
     }
     (candidates, excluded_complex)
+}
+
+/// A paragraph that holds only a printed page number: `18`, `- 18 -`, `— 18 —`.
+fn is_page_number(text: &str) -> bool {
+    let core = text.trim().trim_matches(|value: char| {
+        value == '-' || value == '—' || value == '–' || value.is_whitespace()
+    });
+    !core.is_empty() && core.len() <= 4 && core.chars().all(|value| value.is_ascii_digit())
 }
 
 fn body_slots_are_adjacent(left: usize, right: usize) -> bool {
@@ -386,6 +464,75 @@ fn paragraph_text(paragraph: &Element) -> String {
     let mut value = String::new();
     append_element_text(paragraph, &mut value);
     value
+}
+
+/// The text of every `w:t` element in document order.
+fn text_elements(paragraph: &Element) -> Vec<String> {
+    fn collect(element: &Element, output: &mut Vec<String>) {
+        if local_name(&element.name) == "t" {
+            let mut text = String::new();
+            for child in &element.children {
+                if let XMLNode::Text(value) = child {
+                    text.push_str(value);
+                }
+            }
+            output.push(text);
+            return;
+        }
+        for child in &element.children {
+            if let XMLNode::Element(element) = child {
+                collect(element, output);
+            }
+        }
+    }
+    let mut output = Vec::new();
+    collect(paragraph, &mut output);
+    output
+}
+
+/// Font, size, bold and italic of each text-bearing run, in order.
+fn run_signatures(paragraph: &Element) -> Vec<String> {
+    fn collect(element: &Element, output: &mut Vec<String>) {
+        if local_name(&element.name) == "r" {
+            if find_element(element, "t").is_some() {
+                output.push(run_signature(element));
+            }
+            return;
+        }
+        for child in &element.children {
+            if let XMLNode::Element(element) = child {
+                collect(element, output);
+            }
+        }
+    }
+    let mut output = Vec::new();
+    collect(paragraph, &mut output);
+    output
+}
+
+fn run_signature(run: &Element) -> String {
+    let Some(properties) = child_element(run, "rPr") else {
+        return String::new();
+    };
+    let switch = |name: &str| {
+        child_element(properties, name).is_some_and(|element| {
+            !matches!(
+                attribute(element, "val").as_deref(),
+                Some("0" | "false" | "off")
+            )
+        })
+    };
+    let font = child_element(properties, "rFonts")
+        .and_then(|element| attribute(element, "ascii"))
+        .unwrap_or_default();
+    let size = child_element(properties, "sz")
+        .and_then(|element| attribute(element, "val"))
+        .unwrap_or_default();
+    format!(
+        "{font}|{size}|b{}|i{}",
+        switch("b") as u8,
+        switch("i") as u8
+    )
 }
 
 fn append_element_text(element: &Element, output: &mut String) {
@@ -404,8 +551,15 @@ fn append_element_text(element: &Element, output: &mut String) {
 }
 
 fn paragraph_format(paragraph: &Element) -> ParagraphFormat {
+    let runs = run_signatures(paragraph);
+    let first_run = runs.first().cloned();
+    let last_run = runs.last().cloned();
     let Some(properties) = child_element(paragraph, "pPr") else {
-        return ParagraphFormat::default();
+        return ParagraphFormat {
+            first_run,
+            last_run,
+            ..ParagraphFormat::default()
+        };
     };
     let style = child_element(properties, "pStyle").and_then(|element| attribute(element, "val"));
     let style_lower = style.as_deref().unwrap_or("").to_ascii_lowercase();
@@ -433,6 +587,8 @@ fn paragraph_format(paragraph: &Element) -> ParagraphFormat {
             || style_lower.contains("title")
             || style_lower.starts_with("toc")
             || style_lower.contains("caption"),
+        first_run,
+        last_run,
     }
 }
 
@@ -466,11 +622,38 @@ fn element_contains_any(element: &Element, names: &[&str]) -> bool {
     })
 }
 
-fn merge_document_xml(
-    bytes: &[u8],
-    selected_first_paragraphs: &[usize],
-) -> Result<Vec<u8>, String> {
-    let selected: HashSet<usize> = selected_first_paragraphs.iter().copied().collect();
+/// The paragraph-level edits a repair applies, keyed by paragraph number.
+#[derive(Default)]
+struct MergePlan {
+    /// Second paragraph of each merge, and what goes before its first text.
+    continues: HashMap<usize, Join>,
+    /// Paragraphs whose closing tag is omitted so the next kept one joins them.
+    open_ends: HashSet<usize>,
+    /// Page-number paragraphs removed by a merge.
+    dropped: HashSet<usize>,
+    /// Paragraph number → 1-based index of the `w:t` whose final hyphen is removed.
+    strip_hyphen: HashMap<usize, usize>,
+}
+
+impl MergePlan {
+    fn add(&mut self, candidate: &BreakCandidate, paragraphs: &[ParagraphRecord]) {
+        self.open_ends.insert(candidate.first_paragraph);
+        self.continues
+            .insert(candidate.second_paragraph, candidate.join);
+        if let Some(removed) = candidate.removed_paragraph {
+            self.dropped.insert(removed);
+        }
+        if candidate.join == Join::RemoveHyphen {
+            let last_text = paragraphs[candidate.first_paragraph - 1].text_element_count;
+            self.strip_hyphen
+                .insert(candidate.first_paragraph, last_text);
+        }
+    }
+}
+
+fn merge_document_xml(bytes: &[u8], plan: &MergePlan) -> Result<Vec<u8>, String> {
+    let write_error =
+        |error: std::io::Error| format!("Could not write the repaired Word XML: {error}");
     let mut reader = Reader::from_reader(bytes);
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Vec::with_capacity(bytes.len()));
@@ -479,16 +662,27 @@ fn merge_document_xml(
     let mut paragraph_number = 0usize;
     let mut continuation_paragraph = false;
     let mut skipped_properties_depth = None;
+    // Inside a removed page-number paragraph.
+    let mut dropped_depth = None;
+    // Inserted before the first text of the current continuation paragraph.
+    let mut pending_join = Join::Nothing;
+    // `w:t` elements seen so far in the current paragraph.
+    let mut text_index = 0usize;
+    let mut hyphen_target = None;
+    let mut in_hyphen_target = false;
+    // The last text of the hyphen target, held until its `w:t` closes.
+    let mut held_text: Option<BytesText<'static>> = None;
 
     loop {
         let event = reader
             .read_event()
             .map_err(|error| format!("Could not transform the repaired Word XML: {error}"))?;
+        let inside_paragraph = body_child_depth.is_some_and(|value| depth > value);
         match event {
             Event::Start(start) => {
                 let name = start.name();
-                let local = local_xml_name(name.as_ref());
-                if skipped_properties_depth.is_some() {
+                let local = local_xml_name(name.as_ref()).to_vec();
+                if skipped_properties_depth.is_some() || dropped_depth.is_some() {
                     depth += 1;
                     continue;
                 }
@@ -497,7 +691,19 @@ fn merge_document_xml(
                 }
                 if body_child_depth == Some(depth) && local == b"p" {
                     paragraph_number += 1;
-                    continuation_paragraph = selected.contains(&paragraph_number.saturating_sub(1));
+                    text_index = 0;
+                    hyphen_target = plan.strip_hyphen.get(&paragraph_number).copied();
+                    if plan.dropped.contains(&paragraph_number) {
+                        dropped_depth = Some(depth);
+                        depth += 1;
+                        continue;
+                    }
+                    pending_join = plan
+                        .continues
+                        .get(&paragraph_number)
+                        .copied()
+                        .unwrap_or(Join::Nothing);
+                    continuation_paragraph = plan.continues.contains_key(&paragraph_number);
                     if continuation_paragraph {
                         depth += 1;
                         continue;
@@ -511,18 +717,39 @@ fn merge_document_xml(
                     skipped_properties_depth = Some(depth);
                     depth += 1;
                     continue;
+                } else if local == b"t" && inside_paragraph {
+                    text_index += 1;
+                    if pending_join == Join::Space {
+                        pending_join = Join::Nothing;
+                        writer
+                            .write_event(Event::Start(preserve_space(&start)))
+                            .map_err(write_error)?;
+                        writer
+                            .write_event(Event::Text(BytesText::new(" ")))
+                            .map_err(write_error)?;
+                        depth += 1;
+                        continue;
+                    }
+                    in_hyphen_target = hyphen_target == Some(text_index);
                 }
                 writer
                     .write_event(Event::Start(start.into_owned()))
-                    .map_err(|error| format!("Could not write the repaired Word XML: {error}"))?;
+                    .map_err(write_error)?;
                 depth += 1;
             }
             Event::Empty(empty) => {
-                if skipped_properties_depth.is_some() {
+                if skipped_properties_depth.is_some() || dropped_depth.is_some() {
                     continue;
                 }
                 let name = empty.name();
-                let local = local_xml_name(name.as_ref());
+                let local = local_xml_name(name.as_ref()).to_vec();
+                if body_child_depth == Some(depth) && local == b"p" {
+                    // An empty paragraph still counts toward the scan's numbering.
+                    paragraph_number += 1;
+                    continuation_paragraph = false;
+                    pending_join = Join::Nothing;
+                    hyphen_target = None;
+                }
                 if continuation_paragraph
                     && body_child_depth
                         .map(|value| depth == value + 1)
@@ -531,12 +758,41 @@ fn merge_document_xml(
                 {
                     continue;
                 }
+                if local == b"t" && inside_paragraph {
+                    text_index += 1;
+                    if pending_join == Join::Space {
+                        pending_join = Join::Nothing;
+                        let start = preserve_space(&empty);
+                        let end = start.to_end().into_owned();
+                        writer
+                            .write_event(Event::Start(start))
+                            .map_err(write_error)?;
+                        writer
+                            .write_event(Event::Text(BytesText::new(" ")))
+                            .map_err(write_error)?;
+                        writer.write_event(Event::End(end)).map_err(write_error)?;
+                        continue;
+                    }
+                }
                 writer
                     .write_event(Event::Empty(empty.into_owned()))
-                    .map_err(|error| format!("Could not write the repaired Word XML: {error}"))?;
+                    .map_err(write_error)?;
+            }
+            Event::Text(text) if in_hyphen_target => {
+                if dropped_depth.is_none() && skipped_properties_depth.is_none() {
+                    if let Some(held) = held_text.replace(text.into_owned()) {
+                        writer.write_event(Event::Text(held)).map_err(write_error)?;
+                    }
+                }
             }
             Event::End(end) => {
                 depth = depth.saturating_sub(1);
+                if let Some(dropped) = dropped_depth {
+                    if depth == dropped {
+                        dropped_depth = None;
+                    }
+                    continue;
+                }
                 if let Some(skipped_depth) = skipped_properties_depth {
                     if depth == skipped_depth {
                         skipped_properties_depth = None;
@@ -545,11 +801,20 @@ fn merge_document_xml(
                 }
                 let name = end.name();
                 let local = local_xml_name(name.as_ref());
+                if in_hyphen_target && local == b"t" {
+                    if let Some(held) = held_text.take() {
+                        writer
+                            .write_event(Event::Text(strip_final_hyphen(held)))
+                            .map_err(write_error)?;
+                    }
+                    in_hyphen_target = false;
+                    hyphen_target = None;
+                }
                 let closes_body = local == b"body" && body_child_depth == Some(depth + 1);
                 if body_child_depth == Some(depth) && local == b"p" {
                     // A continuation paragraph's closing tag closes the merged paragraph.
                     // Omit it only when this paragraph also continues into the next one.
-                    let omit_end = selected.contains(&paragraph_number);
+                    let omit_end = plan.open_ends.contains(&paragraph_number);
                     continuation_paragraph = false;
                     if omit_end {
                         continue;
@@ -557,22 +822,45 @@ fn merge_document_xml(
                 }
                 writer
                     .write_event(Event::End(end.into_owned()))
-                    .map_err(|error| format!("Could not write the repaired Word XML: {error}"))?;
+                    .map_err(write_error)?;
                 if closes_body {
                     body_child_depth = None;
                 }
             }
             Event::Eof => break,
             other => {
-                if skipped_properties_depth.is_none() {
-                    writer.write_event(other.into_owned()).map_err(|error| {
-                        format!("Could not write the repaired Word XML: {error}")
-                    })?;
+                if skipped_properties_depth.is_none() && dropped_depth.is_none() {
+                    if let Some(held) = held_text.take() {
+                        writer.write_event(Event::Text(held)).map_err(write_error)?;
+                    }
+                    writer
+                        .write_event(other.into_owned())
+                        .map_err(write_error)?;
                 }
             }
         }
     }
     Ok(writer.into_inner())
+}
+
+/// A copy of a `w:t` start tag with `xml:space="preserve"`, so a leading space survives.
+fn preserve_space(start: &BytesStart) -> BytesStart<'static> {
+    let mut copy = BytesStart::new(String::from_utf8_lossy(start.name().as_ref()).into_owned());
+    for attribute in start.attributes().flatten() {
+        if attribute.key.as_ref() != b"xml:space" {
+            copy.push_attribute(attribute);
+        }
+    }
+    copy.push_attribute(("xml:space", "preserve"));
+    copy.into_owned()
+}
+
+fn strip_final_hyphen(text: BytesText<'static>) -> BytesText<'static> {
+    let raw: &[u8] = text.as_ref();
+    match raw.strip_suffix(b"-") {
+        Some(stripped) => BytesText::from_escaped(String::from_utf8_lossy(stripped).into_owned()),
+        None => text,
+    }
 }
 
 fn local_xml_name(name: &[u8]) -> &[u8] {
@@ -770,6 +1058,194 @@ mod tests {
         assert!(!xml.contains(" paraId=\""));
     }
 
+    fn repair_all_suggested(body: &str) -> (ScanResult, String) {
+        let temp = tempdir().expect("temp dir");
+        let input = temp.path().join("input.docx");
+        let output = temp.path().join("output.docx");
+        make_docx(&input, body);
+        let scan = scan_docx_path(input.to_str().expect("input path")).expect("scan");
+        let ids: Vec<String> = scan
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.suggested_merge)
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        repair_docx_path(
+            input.to_str().expect("input path"),
+            output.to_str().expect("output path"),
+            &ids,
+        )
+        .expect("repair");
+        let entries = read_package(&output).expect("repaired package");
+        let root = parse_document_xml(package_document_xml(&entries).expect("document XML"))
+            .expect("repaired XML");
+        let text = collect_body_paragraphs(&root)
+            .expect("paragraphs")
+            .iter()
+            .map(|paragraph| paragraph.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (scan, text)
+    }
+
+    fn line(text: &str) -> String {
+        format!(r#"<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#)
+    }
+
+    #[test]
+    fn wrapped_english_lines_join_with_one_space() {
+        let body = [
+            line("Students are forced to study difficult subjects and to store"),
+            line("them in their memory."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].reason_code, "lowercase_continuation");
+        assert_eq!(
+            scan.candidates[0].joined_text,
+            "Students are forced to study difficult subjects and to store them in their memory."
+        );
+        assert_eq!(text, scan.candidates[0].joined_text);
+    }
+
+    #[test]
+    fn existing_whitespace_is_not_doubled() {
+        let body = [line("the end of "), line("the line.")].concat();
+        let (_, text) = repair_all_suggested(&body);
+        assert_eq!(text, "the end of the line.");
+    }
+
+    #[test]
+    fn sentence_ends_followed_by_capitals_are_left_alone() {
+        let body = [line("This is a sentence."), line("This is another.")].concat();
+        let scan = scan_body(&body);
+        assert!(scan.candidates.is_empty());
+    }
+
+    fn scan_body(body: &str) -> ScanResult {
+        let temp = tempdir().expect("temp dir");
+        let input = temp.path().join("input.docx");
+        make_docx(&input, body);
+        scan_docx_path(input.to_str().expect("input path")).expect("scan")
+    }
+
+    #[test]
+    fn line_end_hyphen_is_removed_when_the_document_spells_the_word_whole() {
+        let body = [
+            line("A transformation is needed."),
+            line("This radical transfor-"),
+            line("mation begins now."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].reason_code, "hyphenated_word_split");
+        assert_eq!(scan.candidates[0].confidence, "certain");
+        assert_eq!(
+            text,
+            "A transformation is needed.\nThis radical transformation begins now."
+        );
+    }
+
+    #[test]
+    fn line_end_hyphen_is_kept_for_a_compound_the_document_hyphenates() {
+        let body = [
+            line("Self-realization matters."),
+            line("Only self-"),
+            line("realization frees us."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates[0].reason_code, "hyphenated_compound_split");
+        assert_eq!(
+            text,
+            "Self-realization matters.\nOnly self-realization frees us."
+        );
+    }
+
+    #[test]
+    fn unknown_line_end_hyphen_needs_review() {
+        let body = [line("A strange com-"), line("pound appears.")].concat();
+        let scan = scan_body(&body);
+        assert_eq!(scan.candidates[0].confidence, "review");
+        assert_eq!(
+            scan.candidates[0].joined_text,
+            "A strange compound appears."
+        );
+    }
+
+    #[test]
+    fn page_number_inside_a_sentence_is_removed_by_the_merge() {
+        let body = [
+            line("and at the slightest neglect of our"),
+            line("18"),
+            line("guard, the subconscious betrays us."),
+            line("19"),
+            line("Next paragraph."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].id, "p1-p3");
+        assert_eq!(scan.candidates[0].removed_text.as_deref(), Some("18"));
+        assert_eq!(
+            text,
+            "and at the slightest neglect of our guard, the subconscious betrays us.\n19\nNext paragraph."
+        );
+    }
+
+    #[test]
+    fn empty_paragraphs_keep_scan_and_repair_numbering_aligned() {
+        let body = [
+            "<w:p/>".to_string(),
+            line("Heading."),
+            "<w:p/>".to_string(),
+            line("the end of"),
+            line("the line."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates[0].id, "p4-p5");
+        assert_eq!(text, "\nHeading.\n\nthe end of the line.");
+    }
+
+    #[test]
+    fn chained_english_merges_rebuild_one_paragraph() {
+        let body = [
+            line("Millions of students go to school and university daily in an"),
+            line("unconscious, mechanical and subjective way, without knowing why or for what"),
+            line("purpose."),
+        ]
+        .concat();
+        let (scan, text) = repair_all_suggested(&body);
+        assert_eq!(scan.candidates.len(), 2);
+        assert_eq!(
+            text,
+            "Millions of students go to school and university daily in an unconscious, mechanical and subjective way, without knowing why or for what purpose."
+        );
+    }
+
+    #[test]
+    fn heading_font_change_blocks_a_capitalised_merge() {
+        let mut body = String::new();
+        for _ in 0..50 {
+            body.push_str(&line(
+                "A full body line of ordinary prose that runs right up to the margin here",
+            ));
+        }
+        body.push_str(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Chapter 8</w:t></w:r></w:p>"#);
+        body.push_str(r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>LOVE</w:t></w:r></w:p>"#);
+        body.push_str(&line(
+            "Starting from school-desks, students should understand.",
+        ));
+        let scan = scan_body(&body);
+        assert!(scan
+            .candidates
+            .iter()
+            .all(|candidate| candidate.first_paragraph < 51));
+    }
+
     #[test]
     fn never_overwrites_the_source() {
         let temp = tempdir().expect("temp dir");
@@ -867,6 +1343,67 @@ mod tests {
         assert_eq!(suggested_review_merges.len(), 23);
         assert_eq!(suggested_review_keeps.len(), 1);
         assert_eq!(suggested_review_keeps[0].id, "p178-p179");
+    }
+
+    /// Local audit of an English reference: `DOCX_CLEANER_ENGLISH=/path/book.docx`.
+    /// Writes every candidate as JSON to `DOCX_CLEANER_DUMP` when set, and
+    /// repairs every suggested merge to `DOCX_CLEANER_TEST_OUTPUT` when set.
+    #[test]
+    fn english_reference_audit() {
+        let Ok(path) = std::env::var("DOCX_CLEANER_ENGLISH") else {
+            eprintln!("DOCX_CLEANER_ENGLISH is not set; skipping English audit");
+            return;
+        };
+        let scan = scan_docx_path(&path).expect("English DOCX scan");
+        let mut codes: std::collections::BTreeMap<(String, String, bool), usize> =
+            std::collections::BTreeMap::new();
+        for candidate in &scan.candidates {
+            *codes
+                .entry((
+                    candidate.confidence.clone(),
+                    candidate.reason_code.clone(),
+                    candidate.suggested_merge,
+                ))
+                .or_default() += 1;
+        }
+        eprintln!(
+            "English scan: {} paragraphs, {} certain, {} review",
+            scan.paragraph_count, scan.certain_count, scan.review_count
+        );
+        for ((confidence, code, merge), count) in &codes {
+            eprintln!("  {confidence:8} {code:28} merge={merge:5} {count}");
+        }
+        if let Ok(dump) = std::env::var("DOCX_CLEANER_DUMP") {
+            fs::write(
+                &dump,
+                serde_json::to_string_pretty(&scan.candidates).expect("JSON"),
+            )
+            .expect("dump");
+        }
+        if let Ok(output) = std::env::var("DOCX_CLEANER_TEST_OUTPUT") {
+            let ids: Vec<String> = scan
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.suggested_merge)
+                .map(|candidate| candidate.id.clone())
+                .collect();
+            let _ = fs::remove_file(&output);
+            let repaired = repair_docx_path(&path, &output, &ids).expect("English repair");
+            let rescanned = scan_docx_path(&output).expect("cleaned English scan");
+            let removed_pages = scan
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.suggested_merge && candidate.removed_text.is_some())
+                .count();
+            eprintln!(
+                "repaired {} merges; paragraphs {} -> {}",
+                repaired.merged_count, scan.paragraph_count, rescanned.paragraph_count
+            );
+            assert_eq!(
+                rescanned.paragraph_count,
+                scan.paragraph_count - repaired.merged_count - removed_pages
+            );
+        }
     }
 
     #[test]

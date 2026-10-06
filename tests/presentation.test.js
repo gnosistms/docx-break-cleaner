@@ -45,6 +45,17 @@ test("decisionPreview shows a real line break when don't merge is selected", () 
   );
 });
 
+test("decisionPreview shows a page number that a merge would remove", () => {
+  const candidate = {
+    beforeText: "neglect of our",
+    removedText: "18",
+    afterText: "guard, the subconscious",
+    joinedText: "neglect of our guard, the subconscious",
+  };
+  assert.equal(decisionPreview(candidate, false), "neglect of our\n18\nguard, the subconscious");
+  assert.equal(decisionPreview(candidate, true), "neglect of our guard, the subconscious");
+});
+
 test("formatBytes uses readable units", () => {
   assert.equal(formatBytes(2048), "2.0 KB");
 });

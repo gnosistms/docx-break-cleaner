@@ -1,7 +1,7 @@
 export function decisionPreview(candidate, shouldMerge) {
-  return shouldMerge
-    ? candidate.joinedText
-    : `${candidate.beforeText}\n${candidate.afterText}`;
+  if (shouldMerge) return candidate.joinedText;
+  const lines = [candidate.beforeText, candidate.removedText, candidate.afterText];
+  return lines.filter((line) => line != null).join("\n");
 }
 
 export function formatBytes(value) {

@@ -29,9 +29,8 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Assemble download site
         run: |
-          mkdir -p _site/downloads
+          mkdir -p _site
           cp -R docs/. _site/
-          cp "releases/macos-arm64/DOCX Break Cleaner_0.1.0_aarch64.dmg" _site/downloads/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
